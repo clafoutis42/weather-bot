@@ -1,23 +1,33 @@
-import OpenAI from "openai";
+import { ChatAnthropic } from "@langchain/anthropic";
+import { createReactAgent } from "@langchain/langgraph/web";
+import { HumanMessage, AIMessage, BaseMessage, SystemMessage } from "@langchain/core/messages";
 import { LinearClient, LinearDocument as L } from "@linear/sdk";
-import type { ChatCompletionMessageParam } from "openai/resources/index";
 import { getCoordinates, getWeather, getTime } from "./tools";
 import { prompt } from "./prompt";
 import { Content, isToolName, ToolName, UnreachableCaseError } from "../types";
 
 export class AgentClient {
   private linearClient: LinearClient;
-  private openai: OpenAI;
+  private model: ChatAnthropic;
+  private agent: any; // LangGraph agent
 
   // Maximum number of iterations for the agent to prevent infinite loops
   private MAX_ITERATIONS = 10;
 
-  constructor(linearAccessToken: string, openaiApiKey: string) {
+  constructor(linearAccessToken: string, anthropicApiKey: string) {
     this.linearClient = new LinearClient({
       accessToken: linearAccessToken,
     });
-    this.openai = new OpenAI({
-      apiKey: openaiApiKey,
+    this.model = new ChatAnthropic({
+      apiKey: anthropicApiKey,
+      model: "claude-3-5-sonnet-latest",
+      temperature: 0,
+    });
+
+    // Create the LangGraph agent with tools
+    this.agent = createReactAgent({
+      llm: this.model,
+      tools: [getCoordinates, getWeather, getTime],
     });
   }
 
@@ -32,11 +42,10 @@ export class AgentClient {
       agentSessionId
     );
 
-    const messages = [
-      { role: "system", content: prompt },
-      userPrompt ? { role: "user", content: userPrompt } : undefined,
+    const messages: BaseMessage[] = [
+      new HumanMessage(userPrompt || ""),
       ...activities,
-    ].filter(Boolean) as ChatCompletionMessageParam[];
+    ];
 
     let taskComplete = false;
     let iterations = 0;
@@ -45,7 +54,7 @@ export class AgentClient {
       iterations++;
 
       try {
-        const response = await this.callOpenAI(messages);
+        const response = await this.callLangGraphAgent(messages);
         const content = this.mapResponseToLinearActivityContent(response);
 
         if (content.type === L.AgentActivityType.Thought) {
@@ -55,7 +64,7 @@ export class AgentClient {
           });
 
           // Add to conversation history
-          messages.push({ role: "assistant", content: response });
+          messages.push(new AIMessage(response));
 
           // Continue the loop for next cycle, until the task is complete or the maximum iteration count is reached
           await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -75,11 +84,8 @@ export class AgentClient {
           });
 
           // Add tool result to conversation for next LLM call
-          messages.push({ role: "assistant", content: response });
-          messages.push({
-            role: "user",
-            content: `Tool result: ${toolResult}`,
-          });
+          messages.push(new AIMessage(response));
+          messages.push(new HumanMessage(`Tool result: ${toolResult}`));
 
           // PART 3: Create the result activity to inform the user that the tool has been executed
           const resultContent: Content = {
@@ -244,23 +250,22 @@ export class AgentClient {
   }
 
   /**
-   * Call the OpenAI API to get a response
-   * @param messages - The messages to send to the OpenAI API
-   * @returns The response from the OpenAI API
+   * Call the LangGraph agent to get a response
+   * @param messages - The messages to send to the agent
+   * @returns The response from the agent
    */
-  private async callOpenAI(
-    messages: ChatCompletionMessageParam[]
-  ): Promise<string> {
+  private async callLangGraphAgent(messages: BaseMessage[]): Promise<string> {
     try {
-      const response = await this.openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages,
-      });
+      // Invoke the model directly with system prompt and messages
+      const systemMessage = new SystemMessage(prompt);
+      const allMessages = [systemMessage, ...messages];
 
-      return response.choices[0]?.message?.content || "No response";
+      const response = await this.model.invoke(allMessages);
+
+      return response.content as string;
     } catch (error) {
       throw new Error(
-        `OpenAI API error: ${
+        `Anthropic API error: ${
           error instanceof Error ? error.message : "Unknown error"
         }`
       );
@@ -276,7 +281,7 @@ export class AgentClient {
    */
   private async generateMessagesFromPreviousActivities(
     agentSessionId: string
-  ): Promise<ChatCompletionMessageParam[]> {
+  ): Promise<BaseMessage[]> {
     const agentSession = await this.linearClient.agentSession(agentSessionId);
 
     // Get all activities with pagination
@@ -296,7 +301,7 @@ export class AgentClient {
       hasNextPage = activitiesConnection.pageInfo.hasNextPage;
     }
 
-    const activities: ChatCompletionMessageParam[] = [];
+    const activities: BaseMessage[] = [];
     for (const activity of allActivities
       .filter(
         (activity) =>
@@ -304,15 +309,16 @@ export class AgentClient {
           activity.content.type === L.AgentActivityType.Response
       )
       .reverse()) {
-      const role =
-        activity.content.type === L.AgentActivityType.Prompt
-          ? "user"
-          : "assistant";
       const typedContent = activity.content as
         | L.AgentActivityPromptContent
         | L.AgentActivityResponseContent;
       const content = typedContent.body;
-      activities.push({ role, content });
+
+      if (activity.content.type === L.AgentActivityType.Prompt) {
+        activities.push(new HumanMessage(content));
+      } else {
+        activities.push(new AIMessage(content));
+      }
     }
     return activities;
   }

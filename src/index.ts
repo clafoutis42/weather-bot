@@ -38,8 +38,8 @@ export default {
         return new Response("Webhook secret not configured", { status: 500 });
       }
 
-      if (!env.OPENAI_API_KEY) {
-        return new Response("OpenAI API key not configured", { status: 500 });
+      if (!env.ANTHROPIC_API_KEY) {
+        return new Response("Anthropic API key not configured", { status: 500 });
       }
 
       return this.handleWebhookWithEventListener(request, env, ctx);
@@ -95,7 +95,7 @@ export default {
       return;
     }
 
-    const agentClient = new AgentClient(token, env.OPENAI_API_KEY);
+    const agentClient = new AgentClient(token, env.ANTHROPIC_API_KEY);
     const userPrompt = this.generateUserPrompt(webhook);
     await agentClient.handleUserPrompt(webhook.agentSession.id, userPrompt);
   },

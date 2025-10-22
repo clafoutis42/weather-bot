@@ -1,9 +1,12 @@
+import { tool } from "@langchain/core/tools";
+import { z } from "zod";
+
 /**
- * Get the coordinates for a given city name
+ * Get the coordinates for a given city name (internal implementation)
  * @param city_name - The name of the city
  * @returns The coordinates for the given city
  */
-export const getCoordinates = async (
+const getCoordinatesImpl = async (
   city_name: string
 ): Promise<
   { lat: number; lon: number; displayName: string } | { error: string }
@@ -53,12 +56,12 @@ export const getCoordinates = async (
 };
 
 /**
- * Get the weather for a given location
+ * Get the weather for a given location (internal implementation)
  * @param lat - The latitude of the location
  * @param long - The longitude of the location
  * @returns The weather for the given location
  */
-export const getWeather = async (params: {
+const getWeatherImpl = async (params: {
   lat: number;
   long: number;
 }): Promise<string> => {
@@ -124,12 +127,12 @@ export const getWeather = async (params: {
 };
 
 /**
- * Get the current time for a given location
+ * Get the current time for a given location (internal implementation)
  * @param lat - The latitude of the location
  * @param long - The longitude of the location
  * @returns The current time for the given location
  */
-export const getTime = async (params: {
+const getTimeImpl = async (params: {
   lat: number;
   long: number;
 }): Promise<string> => {
@@ -175,3 +178,48 @@ export const getTime = async (params: {
     }`;
   }
 };
+
+// Export LangChain tool wrappers for use with LangGraph
+export const getCoordinates = tool(
+  async ({ city_name }) => {
+    const result = await getCoordinatesImpl(city_name);
+    return JSON.stringify(result);
+  },
+  {
+    name: "getCoordinates",
+    description: "Get coordinates (latitude and longitude) for a given city name",
+    schema: z.object({
+      city_name: z.string().describe("The name of the city to get coordinates for"),
+    }),
+  }
+);
+
+export const getWeather = tool(
+  async ({ lat, long }) => {
+    const result = await getWeatherImpl({ lat, long });
+    return result;
+  },
+  {
+    name: "getWeather",
+    description: "Get current weather for given coordinates (latitude first, then longitude)",
+    schema: z.object({
+      lat: z.number().describe("The latitude of the location"),
+      long: z.number().describe("The longitude of the location"),
+    }),
+  }
+);
+
+export const getTime = tool(
+  async ({ lat, long }) => {
+    const result = await getTimeImpl({ lat, long });
+    return result;
+  },
+  {
+    name: "getTime",
+    description: "Get current time for given coordinates (latitude first, then longitude)",
+    schema: z.object({
+      lat: z.number().describe("The latitude of the location"),
+      long: z.number().describe("The longitude of the location"),
+    }),
+  }
+);
